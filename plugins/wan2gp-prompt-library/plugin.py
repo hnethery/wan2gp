@@ -502,8 +502,8 @@ class PromptLibraryPlugin(WAN2GPPlugin):
 
         return (
             gr.Group(visible=True), # Details group
-            prompt_data["name"],    # Name
-            prompt_data["prompt"],  # Text
+            prompt_data.get("name", ""),    # Name
+            prompt_data.get("prompt", ""),  # Text
             prompt_data.get("negative_prompt", ""), # Negative
             tags_str,               # Tags
             gr.Row(visible=has_variables), # Variable row
