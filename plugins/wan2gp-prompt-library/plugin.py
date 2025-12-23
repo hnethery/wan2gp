@@ -897,8 +897,13 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             else:
                 return "❌ Failed to import collection", gr.update(), gr.update()
 
+        except json.JSONDecodeError:
+            return "❌ Error: Invalid JSON format in the uploaded file", gr.update(), gr.update()
+        except FileNotFoundError:
+            return "❌ Error: File not found", gr.update(), gr.update()
         except Exception as e:
-            return f"❌ Error importing collection: {str(e)}", gr.update(), gr.update()
+            print(f"Error importing collection: {e}")
+            return "❌ Error importing collection (see console for details)", gr.update(), gr.update()
 
     def _export_collection(self, collection_display: str) -> str:
         """Export a collection to JSON file
@@ -920,7 +925,11 @@ class PromptLibraryPlugin(WAN2GPPlugin):
 
         # Save to file
         output_dir = Path.home() / ".wan2gp" / "exports"
-        output_dir.mkdir(exist_ok=True)
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            print(f"Error creating export directory: {e}")
+            return "❌ Error creating export directory"
 
         filename = f"{collection_id}_export.json"
         output_path = output_dir / filename
@@ -929,9 +938,10 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
 
-            return f"✅ Collection exported to: {output_path}"
+            return f"✅ Collection exported successfully"
         except Exception as e:
-            return f"❌ Error exporting collection: {str(e)}"
+            print(f"Error exporting collection to {output_path}: {e}")
+            return "❌ Error exporting collection (see console for details)"
 
     def track_prompt_usage(self, configs: Dict, **kwargs) -> Dict:
         """Data hook - track when saved prompts are used
