@@ -231,6 +231,9 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         # Hidden state for selected prompt ID
         self.selected_prompt_state = gr.State(value=None)
 
+        # Hidden trigger for selection
+        self.selection_trigger = gr.Textbox(elem_id="prompt_library_selection_trigger", visible=False)
+
         # Wire up events
         self._setup_events()
 
@@ -260,7 +263,21 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         )
 
         # Prompt card click (handled via JavaScript callback in HTML)
-        # The prompt ID is passed via the custom JS event
+        self.selection_trigger.change(
+            fn=self._on_prompt_selected,
+            inputs=[self.selection_trigger],
+            outputs=[
+                self.prompt_details_group,
+                self.prompt_name_display,
+                self.prompt_text_display,
+                self.negative_prompt_display,
+                self.prompt_tags_display,
+                self.variable_row,
+                self.variable_inputs,
+                self.selected_prompt_state,
+                self.save_status
+            ]
+        )
 
         # Use prompt buttons
         self.use_prompt_btn.click(
@@ -441,16 +458,59 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             // Store selected prompt ID
             window.selectedPromptId = promptId;
 
-            // Trigger Gradio update
-            const event = new CustomEvent('promptSelected', { detail: { promptId: promptId } });
-            window.dispatchEvent(event);
-
-            console.log('Selected prompt:', promptId);
+            // Find hidden trigger and update it
+            const hiddenTextbox = document.querySelector('#prompt_library_selection_trigger textarea');
+            if (hiddenTextbox) {
+                hiddenTextbox.value = promptId;
+                hiddenTextbox.dispatchEvent(new Event('input', { bubbles: true }));
+                console.log('Selected prompt:', promptId);
+            } else {
+                console.error('Prompt selection trigger not found');
+            }
         }
         </script>
         """
 
         return html
+
+    def _on_prompt_selected(self, prompt_id: str) -> Tuple:
+        """Handle prompt selection from gallery"""
+        if not prompt_id:
+            return (
+                gr.Group(visible=False),
+                "", "", "", "",
+                gr.Row(visible=False),
+                "",
+                None,
+                ""
+            )
+
+        prompt_data = self.library.get_prompt(prompt_id)
+        if not prompt_data:
+             return (
+                gr.Group(visible=False),
+                "", "", "", "",
+                gr.Row(visible=False),
+                "",
+                None,
+                ""
+            )
+
+        # Format details
+        tags_str = ", ".join(prompt_data.get("tags", []))
+        has_variables = bool(prompt_data.get("variables"))
+
+        return (
+            gr.Group(visible=True), # Details group
+            prompt_data["name"],    # Name
+            prompt_data["prompt"],  # Text
+            prompt_data.get("negative_prompt", ""), # Negative
+            tags_str,               # Tags
+            gr.Row(visible=has_variables), # Variable row
+            "",                     # Clear variable inputs
+            prompt_id,              # State
+            ""                      # Clear status
+        )
 
     def _extract_collection_id(self, display_name: str) -> Optional[str]:
         """Extract collection ID from display name"""
