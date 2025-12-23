@@ -102,10 +102,15 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                         scale=2
                     )
 
-                # Prompt gallery (HTML cards)
-                self.prompt_gallery = gr.HTML(
-                    value=self._render_prompt_gallery("favorites"),
-                    elem_id="prompt_library_gallery"
+                # Prompt gallery (using Dataset for selection)
+                # Hidden state to store prompt IDs corresponding to dataset items
+                self.current_prompt_ids = gr.State(value=[])
+
+                self.prompt_dataset = gr.Dataset(
+                    label="Prompts",
+                    components=[gr.HTML(visible=False)],
+                    samples=[],
+                    elem_id="prompt_library_dataset"
                 )
 
                 # Selected prompt details
@@ -231,8 +236,10 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         # Hidden state for selected prompt ID
         self.selected_prompt_state = gr.State(value=None)
 
-        # Hidden trigger for selection
-        self.selection_trigger = gr.Textbox(elem_id="prompt_library_selection_trigger", visible=False)
+        # Initialize gallery with default collection
+        initial_samples, initial_ids = self._get_prompt_samples_and_ids("favorites")
+        self.prompt_dataset.samples = initial_samples
+        self.current_prompt_ids.value = initial_ids
 
         # Wire up events
         self._setup_events()
@@ -246,26 +253,26 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         self.collection_radio.change(
             fn=self._on_collection_change,
             inputs=[self.collection_radio, self.search_box, self.tag_filter],
-            outputs=[self.prompt_gallery, self.prompt_details_group, self.selected_prompt_state]
+            outputs=[self.prompt_dataset, self.current_prompt_ids, self.prompt_details_group, self.selected_prompt_state]
         )
 
         # Search and filter
         self.search_box.change(
             fn=self._on_search_or_filter_change,
             inputs=[self.collection_radio, self.search_box, self.tag_filter],
-            outputs=[self.prompt_gallery, self.prompt_details_group, self.selected_prompt_state]
+            outputs=[self.prompt_dataset, self.current_prompt_ids, self.prompt_details_group, self.selected_prompt_state]
         )
 
         self.tag_filter.change(
             fn=self._on_search_or_filter_change,
             inputs=[self.collection_radio, self.search_box, self.tag_filter],
-            outputs=[self.prompt_gallery, self.prompt_details_group, self.selected_prompt_state]
+            outputs=[self.prompt_dataset, self.current_prompt_ids, self.prompt_details_group, self.selected_prompt_state]
         )
 
-        # Prompt card click (handled via JavaScript callback in HTML)
-        self.selection_trigger.change(
-            fn=self._on_prompt_selected,
-            inputs=[self.selection_trigger],
+        # Prompt selection via Dataset
+        self.prompt_dataset.select(
+            fn=self._on_dataset_select,
+            inputs=[self.current_prompt_ids],
             outputs=[
                 self.prompt_details_group,
                 self.prompt_name_display,
@@ -337,7 +344,7 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                 self.save_tags,
                 self.save_include_settings
             ],
-            outputs=[self.save_status, self.prompt_gallery, self.tag_filter]
+            outputs=[self.save_status, self.prompt_dataset, self.current_prompt_ids, self.tag_filter]
         )
 
         # New collection UI
@@ -367,14 +374,14 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         self.delete_collection_btn.click(
             fn=self._delete_collection,
             inputs=[self.collection_radio],
-            outputs=[self.collection_radio, self.prompt_gallery, self.save_status]
+            outputs=[self.collection_radio, self.prompt_dataset, self.current_prompt_ids, self.save_status]
         )
 
         # Import/Export
         self.import_btn.click(
             fn=self._import_collection,
             inputs=[self.import_file, self.import_merge_checkbox],
-            outputs=[self.import_export_status, self.collection_radio, self.prompt_gallery]
+            outputs=[self.import_export_status, self.collection_radio, self.prompt_dataset, self.current_prompt_ids]
         )
 
         self.export_btn.click(
@@ -383,8 +390,8 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             outputs=[self.import_export_status]
         )
 
-    def _render_prompt_gallery(self, collection_display_name: str, search: str = "", tags: List[str] = None) -> str:
-        """Render prompt cards as HTML
+    def _get_prompt_samples_and_ids(self, collection_display_name: str, search: str = "", tags: List[str] = None) -> Tuple[List[List[str]], List[str]]:
+        """Get prompt samples and IDs for Dataset
 
         Args:
             collection_display_name: Display name of collection (with icon)
@@ -392,21 +399,25 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             tags: Tag filters
 
         Returns:
-            HTML string
+            Tuple of (samples_list, ids_list)
         """
         # Extract collection ID from display name
         collection_id = self._extract_collection_id(collection_display_name)
         if not collection_id:
-            return "<p>Collection not found</p>"
+            return [], []
 
         prompts = self.library.get_prompts_in_collection(collection_id, search, tags)
 
-        if not prompts:
-            return "<div style='text-align: center; padding: 40px; color: #888;'>No prompts found. Add some prompts to get started!</div>"
+        samples = []
+        ids = []
 
-        html = "<div style='display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px;'>"
+        if not prompts:
+            # Optionally return a "No prompts found" placeholder?
+            # Gradio Dataset doesn't handle empty/informational states well visually.
+            return [], []
 
         for prompt in prompts:
+            ids.append(prompt["id"])
             is_favorite = self.library.is_in_favorites(prompt["id"])
             favorite_icon = "⭐" if is_favorite else "☆"
 
@@ -430,17 +441,15 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                 var_count = len(prompt["variables"])
                 variables_html = f'<span style="color: #ff9800; font-size: 12px;">📝 {var_count} variable{"s" if var_count > 1 else ""}</span>'
 
-            html += f"""
-            <div onclick="selectPrompt('{prompt['id']}')"
-                 style="border: 1px solid #ddd; border-radius: 8px; padding: 16px; cursor: pointer;
-                        transition: all 0.2s; background: white;"
-                 onmouseover="this.style.boxShadow='0 4px 8px rgba(0,0,0,0.1)'; this.style.transform='translateY(-2px)'"
-                 onmouseout="this.style.boxShadow='none'; this.style.transform='translateY(0)'">
+            # Card HTML without onclick handler
+            card_html = f"""
+            <div style="border: 1px solid #ddd; border-radius: 8px; padding: 16px; cursor: pointer;
+                        background: white; height: 100%; box-sizing: border-box; display: flex; flex-direction: column;">
                 <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 8px;">
                     <strong style="font-size: 16px;">{prompt['name']}</strong>
                     <span style="font-size: 20px;">{favorite_icon}</span>
                 </div>
-                <p style="color: #666; font-size: 14px; margin: 8px 0;">{prompt_text}</p>
+                <p style="color: #666; font-size: 14px; margin: 8px 0; flex-grow: 1;">{prompt_text}</p>
                 <div style="margin: 8px 0;">{tag_html}</div>
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 12px;">
                     <span style="color: #888; font-size: 12px;">{stats}</span>
@@ -448,32 +457,19 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                 </div>
             </div>
             """
+            samples.append([card_html])
 
-        html += "</div>"
+        return samples, ids
 
-        # Add JavaScript for card selection
-        html += """
-        <script>
-        function selectPrompt(promptId) {
-            // Store selected prompt ID
-            window.selectedPromptId = promptId;
+    def _on_dataset_select(self, prompt_ids: List[str], evt: gr.SelectData) -> Tuple:
+        """Handle dataset selection event"""
+        if not prompt_ids or evt.index >= len(prompt_ids):
+            return self._on_prompt_selected(None)
 
-            // Find hidden trigger and update it
-            const hiddenTextbox = document.querySelector('#prompt_library_selection_trigger textarea');
-            if (hiddenTextbox) {
-                hiddenTextbox.value = promptId;
-                hiddenTextbox.dispatchEvent(new Event('input', { bubbles: true }));
-                console.log('Selected prompt:', promptId);
-            } else {
-                console.error('Prompt selection trigger not found');
-            }
-        }
-        </script>
-        """
+        prompt_id = prompt_ids[evt.index]
+        return self._on_prompt_selected(prompt_id)
 
-        return html
-
-    def _on_prompt_selected(self, prompt_id: str) -> Tuple:
+    def _on_prompt_selected(self, prompt_id: Optional[str]) -> Tuple:
         """Handle prompt selection from gallery"""
         if not prompt_id:
             return (
@@ -502,8 +498,8 @@ class PromptLibraryPlugin(WAN2GPPlugin):
 
         return (
             gr.Group(visible=True), # Details group
-            prompt_data.get("name", ""),    # Name
-            prompt_data.get("prompt", ""),  # Text
+            prompt_data["name"],    # Name
+            prompt_data["prompt"],  # Text
             prompt_data.get("negative_prompt", ""), # Negative
             tags_str,               # Tags
             gr.Row(visible=has_variables), # Variable row
@@ -522,13 +518,15 @@ class PromptLibraryPlugin(WAN2GPPlugin):
     def _on_collection_change(self, collection_display: str, search: str, tags: List[str]) -> Tuple:
         """Handle collection selection change"""
         self.selected_collection = self._extract_collection_id(collection_display)
-        gallery_html = self._render_prompt_gallery(collection_display, search, tags)
-        return gallery_html, gr.update(visible=False), None
+        samples, ids = self._get_prompt_samples_and_ids(collection_display, search, tags)
+
+        # Dataset update requires returning a new Dataset component or updating its samples
+        return gr.Dataset(samples=samples), ids, gr.update(visible=False), None
 
     def _on_search_or_filter_change(self, collection_display: str, search: str, tags: List[str]) -> Tuple:
         """Handle search or filter change"""
-        gallery_html = self._render_prompt_gallery(collection_display, search, tags)
-        return gallery_html, gr.update(visible=False), None
+        samples, ids = self._get_prompt_samples_and_ids(collection_display, search, tags)
+        return gr.Dataset(samples=samples), ids, gr.update(visible=False), None
 
     def _use_prompt_only(self, state: Dict, prompt_id: Optional[str], variables: str) -> Tuple:
         """Copy just the prompt text to the main input
@@ -677,10 +675,10 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         prompt_name = prompt_data["name"]
 
         if self.library.delete_prompt(prompt_id):
-            gallery_html = self._render_prompt_gallery(collection_display)
-            return gallery_html, gr.update(visible=False), f"✅ Deleted prompt: {prompt_name}"
+            samples, ids = self._get_prompt_samples_and_ids(collection_display)
+            return gr.Dataset(samples=samples), ids, gr.update(visible=False), f"✅ Deleted prompt: {prompt_name}"
         else:
-            return gr.update(), gr.update(), f"❌ Failed to delete prompt: {prompt_name}"
+            return gr.update(), gr.update(), gr.update(), f"❌ Failed to delete prompt: {prompt_name}"
 
     def _toggle_favorite(self, prompt_id: Optional[str]) -> Tuple:
         """Toggle favorite status of a prompt
@@ -737,10 +735,10 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             include_settings: Whether to save generation settings
 
         Returns:
-            Tuple of (status_message, gallery_update, tag_filter_update)
+            Tuple of (status_message, gallery_update, ids_update, tag_filter_update)
         """
         if not name or not name.strip():
-            return "⚠️ Please provide a name for the prompt", gr.update(), gr.update()
+            return "⚠️ Please provide a name for the prompt", gr.update(), gr.update(), gr.update()
 
         # Get prompt from input or settings
         prompt = prompt_input
@@ -756,7 +754,7 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                 negative_prompt = settings.get("negative_prompt", "")
 
         if not prompt:
-            return "⚠️ No prompt to save. Enter a prompt or fetch from main tab.", gr.update(), gr.update()
+            return "⚠️ No prompt to save. Enter a prompt or fetch from main tab.", gr.update(), gr.update(), gr.update()
 
         # Parse tags
         tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()]
@@ -797,14 +795,16 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                         collection_display = display
                         break
                 if collection_display:
-                    gallery_update = self._render_prompt_gallery(collection_display)
+                    samples, ids = self._get_prompt_samples_and_ids(collection_display)
+                    gallery_update = gr.Dataset(samples=samples)
+                    ids_update = ids
 
             # Update tag filter
             tag_update = gr.Dropdown(choices=self.library.get_all_tags())
 
-            return f"✅ Saved prompt: {name}", gallery_update, tag_update
+            return f"✅ Saved prompt: {name}", gallery_update, ids_update, tag_update
         else:
-            return "❌ Failed to save prompt", gr.update(), gr.update()
+            return "❌ Failed to save prompt", gr.update(), gr.update(), gr.update()
 
     def _create_new_collection(self, name: str) -> Tuple:
         """Create a new collection"""
@@ -841,15 +841,15 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             collection_display: Display name of collection to delete
 
         Returns:
-            Tuple of (radio_update, gallery_update, status_message)
+            Tuple of (radio_update, gallery_update, ids_update, status_message)
         """
         collection_id = self._extract_collection_id(collection_display)
 
         if not collection_id:
-            return gr.update(), gr.update(), "❌ Collection not found"
+            return gr.update(), gr.update(), gr.update(), "❌ Collection not found"
 
         if collection_id == "favorites":
-            return gr.update(), gr.update(), "⚠️ Cannot delete Favorites collection"
+            return gr.update(), gr.update(), gr.update(), "⚠️ Cannot delete Favorites collection"
 
         if self.library.delete_collection(collection_id):
             # Update radio choices
@@ -857,11 +857,12 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             radio_update = gr.Radio(choices=new_choices, value=new_choices[0] if new_choices else None)
 
             # Update gallery
-            gallery_update = self._render_prompt_gallery(new_choices[0] if new_choices else "favorites")
+            samples, ids = self._get_prompt_samples_and_ids(new_choices[0] if new_choices else "favorites")
+            gallery_update = gr.Dataset(samples=samples)
 
-            return radio_update, gallery_update, f"✅ Deleted collection: {collection_display}"
+            return radio_update, gallery_update, ids, f"✅ Deleted collection: {collection_display}"
         else:
-            return gr.update(), gr.update(), f"❌ Failed to delete collection: {collection_display}"
+            return gr.update(), gr.update(), gr.update(), f"❌ Failed to delete collection: {collection_display}"
 
     def _import_collection(self, file_obj, merge: bool) -> Tuple:
         """Import a collection from JSON file
@@ -871,10 +872,10 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             merge: Whether to merge or replace
 
         Returns:
-            Tuple of (status_message, radio_update, gallery_update)
+            Tuple of (status_message, radio_update, gallery_update, ids_update)
         """
         if not file_obj:
-            return "⚠️ Please select a file to import", gr.update(), gr.update()
+            return "⚠️ Please select a file to import", gr.update(), gr.update(), gr.update()
 
         try:
             # Read file
@@ -891,11 +892,13 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                 # Update UI
                 new_choices = [name for name, _ in self.library.get_collection_names()]
                 radio_update = gr.Radio(choices=new_choices, value=new_choices[0] if new_choices else None)
-                gallery_update = self._render_prompt_gallery(new_choices[0] if new_choices else "favorites")
 
-                return "✅ Collection imported successfully", radio_update, gallery_update
+                samples, ids = self._get_prompt_samples_and_ids(new_choices[0] if new_choices else "favorites")
+                gallery_update = gr.Dataset(samples=samples)
+
+                return "✅ Collection imported successfully", radio_update, gallery_update, ids
             else:
-                return "❌ Failed to import collection", gr.update(), gr.update()
+                return "❌ Failed to import collection", gr.update(), gr.update(), gr.update()
 
         except json.JSONDecodeError:
             return "❌ Error: Invalid JSON format in the uploaded file", gr.update(), gr.update()
