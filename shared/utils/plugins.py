@@ -56,6 +56,7 @@ SYSTEM_PLUGINS = [
     "wan2gp-motion-designer",
     "wan2gp-guides",
     "wan2gp-downloads",
+    "wan2gp-system-prompt-manager",
     "wan2gp-configuration",
     "wan2gp-plugin-manager",
     "wan2gp-about",
