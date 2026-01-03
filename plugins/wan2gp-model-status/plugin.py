@@ -1,5 +1,5 @@
 """
-Model Availability Badges Plugin
+Model Status Plugin
 
 Adds quick “downloaded vs missing” badges next to the core model dropdown
 and a dedicated tab to scan every model definition.
@@ -95,10 +95,10 @@ class ModelAvailabilityAnalyzer:
         return rows
 
 
-class ModelAvailabilityBadgesPlugin(WAN2GPPlugin):
+class ModelStatusPlugin(WAN2GPPlugin):
     def __init__(self):
         super().__init__()
-        self.name = "Model Availability Badges"
+        self.name = "Model Status"
         self.version = "1.0.0"
         self.description = "Badges next to the model picker plus a full model scan tab."
         self.analyzer: Optional[ModelAvailabilityAnalyzer] = None
@@ -114,7 +114,7 @@ class ModelAvailabilityBadgesPlugin(WAN2GPPlugin):
 
         # Tab for overview
         self.add_tab(
-            tab_id="model_availability_badges",
+            tab_id="model_status_overview",
             label="Availability",
             component_constructor=self._build_tab,
             position=3,

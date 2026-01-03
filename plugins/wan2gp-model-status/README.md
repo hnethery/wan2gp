@@ -1,4 +1,4 @@
-# wan2gp-model-availability-badges
+# wan2gp-model-status
 
 A lightweight Wan2GP plugin that surfaces download status for every model definition:
 
@@ -11,4 +11,4 @@ The plugin reads Wan2GP's `models_def` registry and uses the existing `get_local
 
 ## Installation
 
-Install from a blank repository named `wan2gp-model-availability-badges` (one repo per plugin), then enable it from the **Plugins** tab and restart Wan2GP.
+Install from a blank repository named `wan2gp-model-status` (one repo per plugin), then enable it from the **Plugins** tab and restart Wan2GP.
