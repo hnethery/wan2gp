@@ -150,8 +150,8 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                             info="Replace {variables} in the prompt with your values"
                         )
 
-                    # Action buttons
-                    with gr.Row():
+                    # Action buttons (non-edit mode)
+                    with gr.Row() as self.action_buttons_row:
                         self.use_prompt_btn = gr.Button(
                             "📝 Use Prompt Only",
                             variant="secondary",
@@ -164,6 +164,11 @@ class PromptLibraryPlugin(WAN2GPPlugin):
                         )
                         self.edit_prompt_btn = gr.Button("✏️ Edit", scale=1)
                         self.delete_prompt_btn = gr.Button("🗑️ Delete", variant="stop", scale=1)
+
+                    # Edit mode buttons (hidden by default)
+                    with gr.Row(visible=False) as self.edit_buttons_row:
+                        self.save_edit_btn = gr.Button("💾 Save Changes", variant="primary", scale=2)
+                        self.cancel_edit_btn = gr.Button("❌ Cancel", variant="stop", scale=1)
 
         # Save current prompt section
         with gr.Accordion("💾 Create / Save Prompt", open=False):
@@ -299,15 +304,57 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             outputs=[self.refresh_form_trigger, self.main_tabs, self.save_status]
         )
 
-        # Edit prompt
+        # Edit prompt - enter edit mode
         self.edit_prompt_btn.click(
-            fn=self._show_edit_dialog,
+            fn=self._enter_edit_mode,
             inputs=[self.selected_prompt_state],
             outputs=[
                 self.prompt_name_display,
                 self.prompt_text_display,
                 self.negative_prompt_display,
-                self.prompt_tags_display
+                self.prompt_tags_display,
+                self.action_buttons_row,
+                self.edit_buttons_row,
+                self.save_status
+            ]
+        )
+
+        # Save edit changes
+        self.save_edit_btn.click(
+            fn=self._save_edit_changes,
+            inputs=[
+                self.selected_prompt_state,
+                self.prompt_name_display,
+                self.prompt_text_display,
+                self.negative_prompt_display,
+                self.prompt_tags_display,
+                self.collection_radio
+            ],
+            outputs=[
+                self.prompt_name_display,
+                self.prompt_text_display,
+                self.negative_prompt_display,
+                self.prompt_tags_display,
+                self.prompt_dataset,
+                self.current_prompt_ids,
+                self.action_buttons_row,
+                self.edit_buttons_row,
+                self.save_status
+            ]
+        )
+
+        # Cancel edit
+        self.cancel_edit_btn.click(
+            fn=self._cancel_edit,
+            inputs=[self.selected_prompt_state],
+            outputs=[
+                self.prompt_name_display,
+                self.prompt_text_display,
+                self.negative_prompt_display,
+                self.prompt_tags_display,
+                self.action_buttons_row,
+                self.edit_buttons_row,
+                self.save_status
             ]
         )
 
@@ -315,7 +362,7 @@ class PromptLibraryPlugin(WAN2GPPlugin):
         self.delete_prompt_btn.click(
             fn=self._delete_prompt,
             inputs=[self.selected_prompt_state, self.collection_radio],
-            outputs=[self.prompt_gallery, self.prompt_details_group, self.save_status]
+            outputs=[self.prompt_dataset, self.current_prompt_ids, self.prompt_details_group, self.save_status]
         )
 
         # Favorite button
@@ -630,29 +677,172 @@ class PromptLibraryPlugin(WAN2GPPlugin):
 
         return prompt
 
-    def _show_edit_dialog(self, prompt_id: Optional[str]) -> Tuple:
-        """Show prompt details for editing
+    def _enter_edit_mode(self, prompt_id: Optional[str]) -> Tuple:
+        """Enter edit mode - make fields interactive and load data
 
         Args:
             prompt_id: ID of prompt to edit
 
         Returns:
-            Tuple of display values
+            Tuple of (name, prompt, negative_prompt, tags, action_buttons_update, edit_buttons_update, status)
         """
         if not prompt_id:
-            return "", "", "", ""
+            return (
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.update(),
+                gr.update(visible=False),
+                "⚠️ Please select a prompt first"
+            )
 
         prompt_data = self.library.get_prompt(prompt_id)
         if not prompt_data:
-            return "", "", "", ""
+            return (
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.update(),
+                gr.update(visible=False),
+                "❌ Prompt not found"
+            )
 
         tags_str = ", ".join(prompt_data.get("tags", []))
 
         return (
-            prompt_data["name"],
-            prompt_data["prompt"],
-            prompt_data.get("negative_prompt", ""),
-            tags_str
+            gr.Textbox(value=prompt_data["name"], interactive=True),
+            gr.Textbox(value=prompt_data["prompt"], interactive=True, lines=3),
+            gr.Textbox(value=prompt_data.get("negative_prompt", ""), interactive=True, lines=2),
+            gr.Textbox(value=tags_str, interactive=True),
+            gr.Row(visible=False),  # Hide action buttons
+            gr.Row(visible=True),   # Show edit buttons
+            "✏️ Edit mode - make changes and click Save"
+        )
+
+    def _save_edit_changes(
+        self,
+        prompt_id: Optional[str],
+        name: str,
+        prompt: str,
+        negative_prompt: str,
+        tags_str: str,
+        collection_display: str
+    ) -> Tuple:
+        """Save edited prompt changes
+
+        Args:
+            prompt_id: ID of prompt to update
+            name: New name
+            prompt: New prompt text
+            negative_prompt: New negative prompt
+            tags_str: Comma-separated tags
+            collection_display: Current collection display name
+
+        Returns:
+            Tuple of (name_update, prompt_update, negative_update, tags_update, dataset_update, ids_update, action_buttons_update, edit_buttons_update, status)
+        """
+        if not prompt_id:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(),
+                gr.update(), gr.update(visible=False),
+                "⚠️ Please select a prompt first"
+            )
+
+        # Parse tags
+        tags = [tag.strip() for tag in tags_str.split(",") if tag.strip()]
+
+        # Update prompt in library
+        if self.library.update_prompt(
+            prompt_id=prompt_id,
+            name=name.strip() if name else None,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            tags=tags
+        ):
+            # Get updated samples
+            samples, ids = self._get_prompt_samples_and_ids(collection_display)
+
+            # Reload data for display (non-interactive)
+            prompt_data = self.library.get_prompt(prompt_id)
+            if prompt_data:
+                tags_str = ", ".join(prompt_data.get("tags", []))
+
+                return (
+                    gr.Textbox(value=prompt_data["name"], interactive=False),
+                    gr.Textbox(value=prompt_data["prompt"], interactive=False, lines=3),
+                    gr.Textbox(value=prompt_data.get("negative_prompt", ""), interactive=False, lines=2),
+                    gr.Textbox(value=tags_str, interactive=False),
+                    gr.Dataset(samples=samples),
+                    ids,
+                    gr.Row(visible=True),   # Show action buttons
+                    gr.Row(visible=False),  # Hide edit buttons
+                    f"✅ Saved changes to: {name}"
+                )
+            else:
+                return (
+                    gr.Textbox(value=name, interactive=False),
+                    gr.Textbox(value=prompt, interactive=False, lines=3),
+                    gr.Textbox(value=negative_prompt, interactive=False, lines=2),
+                    gr.Textbox(value=tags_str, interactive=False),
+                    gr.Dataset(samples=samples),
+                    ids,
+                    gr.Row(visible=True),
+                    gr.Row(visible=False),
+                    "✅ Saved changes (refresh to view)"
+                )
+        else:
+            return (
+                gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(),
+                gr.update(), gr.update(),
+                "❌ Failed to save changes"
+            )
+
+    def _cancel_edit(self, prompt_id: Optional[str]) -> Tuple:
+        """Cancel edit mode - revert to non-interactive display
+
+        Args:
+            prompt_id: ID of prompt to display
+
+        Returns:
+            Tuple of (name, prompt, negative_prompt, tags, action_buttons_update, edit_buttons_update, status)
+        """
+        if not prompt_id:
+            return (
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.update(),
+                gr.update(visible=False),
+                ""
+            )
+
+        prompt_data = self.library.get_prompt(prompt_id)
+        if not prompt_data:
+            return (
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.Textbox(value="", interactive=False),
+                gr.update(),
+                gr.update(visible=False),
+                "❌ Prompt not found"
+            )
+
+        tags_str = ", ".join(prompt_data.get("tags", []))
+
+        return (
+            gr.Textbox(value=prompt_data["name"], interactive=False),
+            gr.Textbox(value=prompt_data["prompt"], interactive=False, lines=3),
+            gr.Textbox(value=prompt_data.get("negative_prompt", ""), interactive=False, lines=2),
+            gr.Textbox(value=tags_str, interactive=False),
+            gr.Row(visible=True),   # Show action buttons
+            gr.Row(visible=False),  # Hide edit buttons
+            "❌ Cancelled edit"
         )
 
     def _delete_prompt(self, prompt_id: Optional[str], collection_display: str) -> Tuple:
@@ -663,14 +853,14 @@ class PromptLibraryPlugin(WAN2GPPlugin):
             collection_display: Current collection display name
 
         Returns:
-            Tuple of (gallery_update, details_update, status_message)
+            Tuple of (dataset_update, ids_update, details_update, status_message)
         """
         if not prompt_id:
-            return gr.update(), gr.update(), "⚠️ Please select a prompt first"
+            return gr.update(), gr.update(), gr.update(), "⚠️ Please select a prompt first"
 
         prompt_data = self.library.get_prompt(prompt_id)
         if not prompt_data:
-            return gr.update(), gr.update(), "❌ Prompt not found"
+            return gr.update(), gr.update(), gr.update(), "❌ Prompt not found"
 
         prompt_name = prompt_data["name"]
 
